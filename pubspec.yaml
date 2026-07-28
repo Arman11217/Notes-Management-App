@@ -42,6 +42,11 @@ dependencies:
   # For formatted date display in notes list
   intl: ^0.19.0
 
+  # BDApps app dependencies
+  provider: ^6.1.2          # State management
+  http: ^1.6.0              # API calls
+  shared_preferences: ^2.5.5 # Local session storage
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -52,6 +57,16 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
+
+  # Generates launcher icons for Android & iOS from a single source image.
+  flutter_launcher_icons: ^0.13.1
+
+flutter_launcher_icons:
+  android: true
+  ios: false
+  image_path: "assets/noteflow_logo.png"
+  adaptive_icon_background: "#FFFFFF"
+  adaptive_icon_foreground: "assets/noteflow_logo.png"
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
@@ -64,10 +79,9 @@ flutter:
   # the material Icons class.
   uses-material-design: true
 
-  # To add assets to your application, add an assets section, like this:
-  # assets:
-  #   - images/a_dot_burr.jpeg
-  #   - images/a_dot_ham.jpeg
+  # App assets
+  assets:
+    - assets/noteflow_logo.png
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

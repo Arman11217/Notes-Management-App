@@ -3,6 +3,7 @@ import 'package:intl/intl.dart';
 import '../models/note.dart';
 import '../services/firestore_service.dart';
 import 'add_edit_note_screen.dart';
+import 'profile_screen.dart';
 
 
 class NotesListScreen extends StatefulWidget {
@@ -80,6 +81,20 @@ class _NotesListScreenState extends State<NotesListScreen> {
       appBar: AppBar(
         title: const Text('My Notes'),
         centerTitle: true,
+        actions: [
+          IconButton(
+            tooltip: 'Profile',
+            icon: const Icon(Icons.person_outline),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const ProfileScreen(),
+                ),
+              );
+            },
+          ),
+        ],
       ),
       body: StreamBuilder<List<Note>>(
         stream: _service.getNotesStream(),
@@ -134,7 +149,7 @@ class _NotesListScreenState extends State<NotesListScreen> {
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'Tap '+' to create a new note',
+                    'Tap + to create a new note',
                     style: TextStyle(color: Colors.grey[500]),
                   ),
                 ],

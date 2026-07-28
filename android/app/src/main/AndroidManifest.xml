@@ -4,7 +4,7 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
 
     <application
-        android:label="Notes Manager"
+        android:label="NoteFlow"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
@@ -47,3 +47,4 @@
         </intent>
     </queries>
 </manifest>
+
