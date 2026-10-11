@@ -38,12 +38,32 @@ class _SplashScreenState extends State<SplashScreen>
   }
 
   /// 2.5 sec por navigate kori - auth state dekhe.
+  /// AuthProvider.loadSavedSession() ke o await korar try kori jate
+  /// fresh-install e stored session miss na hoy.
   Future<void> _navigateAfterDelay() async {
-    await Future.delayed(const Duration(milliseconds: 2500));
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+
+    // Wait for any in-flight session load to complete, then ensure at
+    // least 2.5s of splash branding is shown for a smooth UX.
+    await Future.wait<dynamic>([
+      authProvider.sessionReady,
+      Future.delayed(const Duration(milliseconds: 2500)),
+    ]);
+
     if (!mounted) return;
 
-    final authProvider = Provider.of<AuthProvider>(context, listen: false);
     if (authProvider.isLoggedIn) {
+      // Re-check subscription on resume so the user doesn't see stale
+      // "Active" badge if they unsubscribed while the app was closed.
+      try {
+        final phone = authProvider.phoneNumber;
+        if (phone != null && phone.isNotEmpty) {
+          await authProvider.checkSubscription(phone);
+        }
+      } catch (_) {
+        // Network might be down — fall back to last-known state.
+      }
+      if (!mounted) return;
       _goTo(const NotesListScreen());
     } else {
       _goTo(const LoginPage());

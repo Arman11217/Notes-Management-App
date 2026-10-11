@@ -7,6 +7,7 @@ import 'providers/auth_provider.dart';
 import 'screens/splash_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/notes_list_screen.dart';
+import 'screens/subscription_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -61,6 +62,11 @@ class MyApp extends StatelessWidget {
           '/login': (_) => const LoginPage(),
           '/home': (_) => const NotesListScreen(),
           '/splash': (_) => const SplashScreen(),
+          '/subscribe': (ctx) {
+            final phone =
+                ModalRoute.of(ctx)?.settings.arguments as String? ?? '';
+            return SubscriptionScreen(phoneNumber: phone);
+          },
         },
       ),
     );

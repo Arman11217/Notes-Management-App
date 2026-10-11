@@ -19,6 +19,8 @@ final String _baseUrl = AppConfig.baseUrl;
 
 /// Profile Screen - User info + logout + unsubscribe.
 class ProfileScreen extends StatefulWidget {
+
+
   const ProfileScreen({super.key});
 
   @override
@@ -26,15 +28,35 @@ class ProfileScreen extends StatefulWidget {
 }
 
 class _ProfileScreenState extends State<ProfileScreen> {
-  bool _isUnsubscribing = false;
+  bool _isLoggedIn = false;
+  String _phoneNumber = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadLoginStatus();
+  }
+
+  /// Read the persisted `isLoggedIn` flag and phone number from
+  /// SharedPreferences. Phone lookup tolerates both key families
+  /// (`logged_in_phone` written by AuthProvider and `userPhone` written
+  /// by older screens) so we always get the most recently saved value.
+  /// Both fall back to safe defaults when the keys are absent.
+  Future<void> _loadLoginStatus() async {
+    final prefs = await SharedPreferences.getInstance();
+    final loggedIn = prefs.getBool('isLoggedIn') ?? false;
+    final phoneNumber =
+        prefs.getString('logged_in_phone') ?? prefs.getString('userPhone') ?? '';
+    if (!mounted) return;
+    setState(() {
+      _isLoggedIn = loggedIn;
+      _phoneNumber = phoneNumber;
+    });
+  }
 
   Future<void> _unsubscribe() async {
-    if (_isUnsubscribing) return;
-
-    // Capture the phone from the provider *before* any async gap so we
-    // don't reuse a stale BuildContext later.
-    final authProvider = Provider.of<AuthProvider>(context, listen: false);
-    final phone = authProvider.phoneNumber ?? '';
+    final prefs = await SharedPreferences.getInstance();
+    final phone = prefs.getString('userPhone') ?? '';
 
     if (phone.isEmpty) {
       if (!mounted) return;
@@ -70,16 +92,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
       ),
     );
 
-    if (confirmed != true || !mounted) return;
-
-    setState(() => _isUnsubscribing = true);
+    if (confirmed != true) return;
+    if (!mounted) return;
 
     // Hold a reference to the loader dialog so we can reliably close it.
     bool loaderOpen = true;
+    final loaderContext = context;
     showDialog<void>(
-      context: context,
+      context: loaderContext,
       barrierDismissible: false,
-      builder: (_) => PopScope(
+      builder: (dialogContext) => PopScope(
         canPop: false,
         child: const Center(child: CircularProgressIndicator()),
       ),
@@ -98,14 +120,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
     try {
       final res = await http
           .post(
-            Uri.parse('${_baseUrl}unsubscribe.php'),
+            Uri.parse('$_baseUrl/unsubscribe.php'),
             body: {'user_mobile': phone},
           )
           .timeout(const Duration(seconds: 15));
 
       if (!mounted) return;
       await closeLoader();
-      if (!mounted) return;
 
       if (res.statusCode != 200) {
         throw Exception('HTTP ${res.statusCode}');
@@ -122,7 +143,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
       final subscriptionStatus =
           (data['subscriptionStatus']?.toString() ?? '').toUpperCase();
 
-      final success = successFlag ||
+      final success =
+          successFlag ||
           statusCode == 'S1000' ||
           subscriptionStatus == 'UNREGISTERED';
 
@@ -132,12 +154,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
         final prefs = await SharedPreferences.getInstance();
         await prefs.setBool('isLoggedIn', false);
         await prefs.remove('userPhone');
-        await prefs.remove('logged_in_phone');
-        await prefs.remove('is_subscribed');
-
-        // Also clear AuthProvider's in-memory state.
-        if (!mounted) return;
-        await Provider.of<AuthProvider>(context, listen: false).logout();
 
         if (!mounted) return;
 
@@ -186,15 +202,19 @@ class _ProfileScreenState extends State<ProfileScreen> {
           backgroundColor: Colors.redAccent,
         ),
       );
-    } finally {
-      if (mounted) setState(() => _isUnsubscribing = false);
     }
   }
+
 
   @override
   Widget build(BuildContext context) {
     final authProvider = Provider.of<AuthProvider>(context);
-    final phone = authProvider.phoneNumber ?? 'Unknown';
+    // Prefer the SharedPreferences-cached phone (already loaded in
+    // initState). Fall back to the provider value when present, and
+    // finally to a placeholder so the UI never shows an empty string.
+    final phone = _phoneNumber.isNotEmpty
+        ? _phoneNumber
+        : (authProvider.phoneNumber ?? 'Unknown');
 
     return Scaffold(
       appBar: AppBar(
@@ -242,11 +262,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Text(
-                  authProvider.isSubscribed
+                  _isLoggedIn
                       ? '✓ Active Subscriber'
                       : '⚠ No Active Subscription',
                   style: TextStyle(
-                    color: authProvider.isSubscribed
+                    color: _isLoggedIn
                         ? Colors.green.shade800
                         : Colors.orange.shade800,
                     fontWeight: FontWeight.w600,
@@ -260,49 +280,27 @@ class _ProfileScreenState extends State<ProfileScreen> {
             //_infoTile(Icons.fingerprint, 'App ID', AppConfig.bdappsAppId),
             //_infoTile(Icons.tag, 'NADB ID', AppConfig.nadbId),
             const SizedBox(height: 16),
-            _sectionTitle('Subscription'),
-            ListTile(
-              leading: const Icon(Icons.subscriptions, color: Colors.blue),
-              title: const Text('Check subscription'),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: _isUnsubscribing
-                  ? null
-                  : () async {
-                      final hasSub =
-                          await authProvider.checkSubscription(phone);
-                      if (!context.mounted) return;
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text(
-                            hasSub
-                                ? 'Active subscription found ✓'
-                                : 'No active subscription',
-                          ),
-                        ),
-                      );
-                    },
-            ),
             ListTile(
               leading: const Icon(Icons.cancel_outlined, color: Colors.red),
               title: Text(
                 'Unsubscribe',
                 style: TextStyle(
-                  color: _isUnsubscribing ? Colors.grey : Colors.red,
+                  color: Colors.red,
                 ),
               ),
               subtitle: Text('Send SMS: ${AppConfig.fullUssdCode}'),
-              onTap: _isUnsubscribing ? null : _unsubscribe,
+              onTap: () {
+                _unsubscribe();
+              }
             ),
             const SizedBox(height: 24),
             _sectionTitle('Account'),
             ListTile(
               leading: const Icon(Icons.logout, color: Colors.orange),
               title: const Text('Logout'),
-              onTap: _isUnsubscribing
-                  ? null
-                  : () => _confirmLogout(context),
+              onTap: () => _confirmLogout(context),
             ),
-            const SizedBox(height: 32),
+            const SizedBox(height: 100),
             Center(
               child: Text(
                 'Version 1.0.0',

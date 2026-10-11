@@ -1,3 +1,5 @@
+// eta login + OTP verification page er code
+
 import 'dart:async';
 import 'dart:convert';
 
@@ -5,25 +7,15 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../config/app_config.dart';
+const String _baseUrl = "https://www.bdappsdigitalapps.com/NADB26105/"; // change with your application server url
 
-// BDApps API base URL — automatically derived from your NADB ID.
-// Change `nadbId` in lib/config/app_config.dart to point at your
-// application server. The trailing slash is required because every
-// endpoint below concatenates `path.php` directly.
-// Use `final` (not `const`) because AppConfig.baseUrl is a getter, not
-// a compile-time constant.
-final String _baseUrl = AppConfig.baseUrl;
-
-/// True for Robi (018) / Airtel (016) prefixes. We strip the leading 0
-/// later so the value sent to BDApps is the international form
-/// `8801XXXXXXXXX`.
-bool _isSupportedRobiAirtelNumber(String phone) {
+// ignore: strict_top_level_inference
+bool _isSupportedRobiCirkleNumber(String phone) {
   return RegExp(r'^01(?:6|8)\d{8}$').hasMatch(phone);
 }
 
-/// Calls `check_subscription.php` and returns true when the server reports
-/// an active or activating subscription:
+/// Calls `check_subscription.php` and returns true when the server reports an
+/// active or activating subscription:
 ///   - `REGISTERED`              → billing confirmed
 ///   - `INITIAL CHARGING PENDING` → subscription exists, billing still ticking
 /// Any other state (`UNREGISTERED`, missing field, error, etc.) returns false.
@@ -47,19 +39,18 @@ Future<bool> _isUserSubscribedOrPending(String phone) async {
 
     final status =
         decoded['subscriptionStatus']?.toString().trim().toUpperCase() ?? '';
-    return status == 'REGISTERED';
+    return status == 'REGISTERED' || status == 'INITIAL CHARGING PENDING';
   } catch (e) {
     return false;
   }
 }
 
-/// Polls `check_subscription.php` until REGISTERED (or INITIAL CHARGING
-/// PENDING — both grant access) is reported, or `maxAttempts` is reached.
-/// Returns true on either of those states, false otherwise.
+/// Polls `check_subscription.php` until REGISTERED or INITIAL CHARGING PENDING
+/// is reported, or `maxAttempts` is reached. Returns true on either state.
 Future<bool> _waitForSubscriptionSyncShared(
   String phone, {
-  int maxAttempts = 12,
-  Duration delay = const Duration(seconds: 2),
+  int maxAttempts = 5,
+  Duration delay = const Duration(seconds: 1),
 }) async {
   for (var i = 0; i < maxAttempts; i++) {
     await Future.delayed(delay);
@@ -68,14 +59,6 @@ Future<bool> _waitForSubscriptionSyncShared(
     }
   }
   return false;
-}
-
-/// Converts a local Robi/Airtel number (`01XXXXXXXXX`) into the
-/// international format (`8801XXXXXXXXX`) that BDApps expects.
-String _toInternational(String phone) {
-  if (phone.startsWith('880')) return phone;
-  if (phone.startsWith('0')) return '88$phone';
-  return phone;
 }
 
 class LoginPage extends StatefulWidget {
@@ -100,26 +83,23 @@ class _LoginPageState extends State<LoginPage> {
       _showError('মোবাইল নম্বর দিন');
       return;
     }
-    if (!_isSupportedRobiAirtelNumber(phone)) {
-      _showError('সঠিক Robi/Airtel নম্বর দিন');
+    if (!_isSupportedRobiCirkleNumber(phone)) {
+      _showError('সঠিক Robi/Cirkle নম্বর দিন');
       return;
     }
 
     setState(() => _isLoading = true);
 
-    // Convert to international format for the BDApps API.
-    final intlPhone = _toInternational(phone);
-
     try {
       // Check if already subscribed
-      final isSubscribed = await _checkAlreadySubscribed(intlPhone);
+      final isSubscribed = await _checkAlreadySubscribed(phone);
 
       if (isSubscribed) {
         _showSuccess('স্বাগতম! লগইন হচ্ছে...');
         await Future.delayed(const Duration(milliseconds: 800));
 
         try {
-          await _saveAndGoHome(intlPhone);
+          await _saveAndGoHome(phone);
         } catch (e) {
           if (mounted) {
             _showError('লগইন করতে সমস্যা হয়েছে। আবার চেষ্টা করুন।');
@@ -129,37 +109,17 @@ class _LoginPageState extends State<LoginPage> {
         return;
       }
 
-      // Send OTP request. Wrapped in its own try/catch so a network blip
-      // or non-JSON response surfaces as "OTP পাঠাতে সমস্যা" instead of
-      // the generic "নেটওয়ার্ক সমস্যা" — the real failure is on the
-      // send_otp endpoint, not on the device's connectivity.
-      Map<String, dynamic> otpData;
-      try {
-        final otpResponse = await http
-            .post(
-              Uri.parse('${_baseUrl}send_otp.php'),
-              body: {'user_mobile': intlPhone},
-            )
-            .timeout(const Duration(seconds: 15));
+      // Send OTP request
+      final otpResponse = await http
+          .post(
+            Uri.parse('${_baseUrl}send_otp.php'),
+            body: {'user_mobile': phone},
+          )
+          .timeout(const Duration(seconds: 15));
 
-        final decoded = jsonDecode(otpResponse.body);
-        if (decoded is! Map<String, dynamic>) {
-          _showError(
-            'OTP পাঠাতে সমস্যা হয়েছে। সার্ভার থেকে সঠিক উত্তর আসছে না।',
-          );
-          return;
-        }
-        otpData = decoded;
-      } on TimeoutException {
-        _showError('OTP পাঠাতে সমস্যা হয়েছে। সময় শেষ — আবার চেষ্টা করুন।');
-        return;
-      } on FormatException {
-        _showError(
-          'OTP পাঠাতে সমস্যা হয়েছে। সার্ভার থেকে সঠিক উত্তর আসছে না।',
-        );
-        return;
-      } catch (e) {
-        _showError('OTP পাঠাতে সমস্যা হয়েছে। আবার চেষ্টা করুন।');
+      final otpData = jsonDecode(otpResponse.body);
+      if (otpData is! Map<String, dynamic>) {
+        _showError('সার্ভার থেকে ভুল তথ্য এসেছে');
         return;
       }
 
@@ -175,35 +135,23 @@ class _LoginPageState extends State<LoginPage> {
           context,
           MaterialPageRoute(
             builder: (_) =>
-                OtpVerifyPage(phone: intlPhone, referenceNo: referenceNo),
+                OtpVerifyPage(phone: phone, referenceNo: referenceNo),
           ),
         );
       } else if (statusCode == 'E1351' ||
           message.toLowerCase().contains('already registered')) {
         // Server says user is already in the system. Re-check
         // check_subscription.php with polling — the previous call may have
-        // raced with billing. REGISTERED is the strict happy-path, but we
-        // also let them through with a soft-login if the carrier hasn't
-        // propagated yet — the home screen will keep checking.
-        final subscribed = await _waitForSubscriptionSyncShared(intlPhone);
+        // raced with billing. Only REGISTERED can grant home access.
+        final subscribed = await _waitForSubscriptionSyncShared(phone);
 
         if (!mounted) return;
 
         if (!subscribed) {
-          // Billing hasn't synced yet — grant soft-login so the user is
-          // not stranded. The home screen will poll subscription status
-          // and update the UI as soon as BDApps reports REGISTERED.
-          _showSuccess('লগইন হচ্ছে...');
-          final prefs = await SharedPreferences.getInstance();
-          await prefs.setBool('isLoggedIn', true);
-          await prefs.setString('userPhone', intlPhone);
-          await prefs.setBool('is_subscribed', false);
-          await Future.delayed(const Duration(milliseconds: 800));
-          if (!mounted) return;
-          Navigator.pushNamedAndRemoveUntil(
-            context,
-            '/home',
-            (route) => false,
+          // Still not REGISTERED (e.g. INITIAL CHARGING PENDING).
+          // Refuse to log in.
+          _showError(
+            'সাবস্ক্রিপশন এখনো সক্রিয় হয়নি। কিছুক্ষণ পর আবার চেষ্টা করুন।',
           );
           return;
         }
@@ -212,7 +160,7 @@ class _LoginPageState extends State<LoginPage> {
         await Future.delayed(const Duration(milliseconds: 800));
 
         try {
-          await _saveAndGoHome(intlPhone);
+          await _saveAndGoHome(phone);
         } catch (e) {
           if (mounted) {
             _showError(
@@ -280,46 +228,22 @@ class _LoginPageState extends State<LoginPage> {
             mainAxisAlignment: MainAxisAlignment.center,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // App logo
-              SizedBox(
-                width: 90,
-                height: 90,
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(24),
-                    boxShadow: [
-                      BoxShadow(
-                        color: const Color(0xFF667eea).withValues(alpha: 0.4),
-                        blurRadius: 20,
-                        offset: const Offset(0, 10),
-                      ),
-                    ],
-                  ),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(24),
-                    child: Image.asset(
-                      'assets/noteflow_logo.png',
-                      width: 90,
-                      height: 90,
-                      fit: BoxFit.contain,
-                    ),
-                  ),
-                ),
-              ),
+              Image.asset('assets/noteflow_logo.png', width: 100, height: 100, ),
               const SizedBox(height: 20),
               Text(
                 'NoteFlow',
                 style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                      fontWeight: FontWeight.bold,
-                      color: Colors.indigo.shade500,
-                    ),
+                  fontWeight: FontWeight.bold,
+                  color: Colors.green.shade500
+                ),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 20),
+              // const Text('Robi/Cirkle নম্বর দিন', textAlign: TextAlign.center),
               const SizedBox(height: 8),
               Text(
-                'Daily charge is 2.78 BDT (including VAT, SD & SC). For Robi and Airtel users only.',
+                'Daily charge is 2.78 BDT (including VAT, SD & SC). For Robi and Cirkle users only.',
+                // '2.78 BDT including (Vat+SC+SD) For Robi and Cirkle Users only.',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   color: Colors.grey.shade600,
@@ -332,15 +256,13 @@ class _LoginPageState extends State<LoginPage> {
                 controller: _phoneController,
                 keyboardType: TextInputType.phone,
                 enabled: !_isLoading,
-                maxLength: 11,
                 decoration: InputDecoration(
                   labelText: 'মোবাইল নম্বর',
-                  hintText: '018XXXXXXXX',
+                  hintText: '018********',
                   prefixIcon: const Icon(Icons.phone_android_rounded),
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  counterText: '',
                 ),
               ),
               const SizedBox(height: 20),
@@ -467,34 +389,19 @@ class _OtpVerifyPageState extends State<OtpVerifyPage> {
         // OTP verified. Poll subscription status. REGISTERED or
         // INITIAL CHARGING PENDING both grant app access; everything else
         // (still pending incorrectly, error) blocks it.
-        //
-        // The fact that we got a valid OTP from the BDApps gateway means the
-        // user has already subscribed and the carrier confirmed the charge —
-        // so if billing sync hasn't propagated to the subscription endpoint
-        // yet, we trust the OTP and let them in rather than locking them out.
         final subscribed = await _waitForSubscriptionSyncShared(widget.phone);
 
         if (!mounted) return;
 
         if (!subscribed) {
-          // Subscription not yet REGISTERED on the BDApps side after polling,
-          // but the OTP itself came back successfully — that means the user
-          // already paid. Persist a soft-login state so the home screen can
-          // re-check subscription in the background, instead of stranding
-          // them on the OTP screen with no way to retry from inside the app.
+          // Neither REGISTERED nor INITIAL CHARGING PENDING after polling.
           final prefs = await SharedPreferences.getInstance();
-          await prefs.setBool('isLoggedIn', true);
-          await prefs.setString('userPhone', widget.phone);
-          await prefs.setBool('is_subscribed', false);
+          await prefs.setBool('isLoggedIn', false);
+          await prefs.remove('userPhone');
 
           if (!mounted) return;
-          _showSuccess('লগইন হচ্ছে...');
-          await Future.delayed(const Duration(milliseconds: 800));
-          if (!mounted) return;
-          Navigator.pushNamedAndRemoveUntil(
-            context,
-            '/home',
-            (route) => false,
+          _showError(
+            'সাবস্ক্রিপশন এখনো সক্রিয় হয়নি। কিছুক্ষণ পর আবার চেষ্টা করুন।',
           );
           return;
         }
@@ -503,7 +410,6 @@ class _OtpVerifyPageState extends State<OtpVerifyPage> {
         final prefs = await SharedPreferences.getInstance();
         await prefs.setBool('isLoggedIn', true);
         await prefs.setString('userPhone', widget.phone);
-        await prefs.setBool('is_subscribed', true);
 
         if (!mounted) return;
         Navigator.pushNamedAndRemoveUntil(context, '/home', (route) => false);
@@ -530,17 +436,6 @@ class _OtpVerifyPageState extends State<OtpVerifyPage> {
         backgroundColor: Colors.redAccent,
         behavior: SnackBarBehavior.floating,
         duration: const Duration(seconds: 4),
-      ),
-    );
-  }
-
-  void _showSuccess(String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(msg),
-        backgroundColor: Colors.green,
-        behavior: SnackBarBehavior.floating,
-        duration: const Duration(seconds: 2),
       ),
     );
   }
@@ -573,8 +468,8 @@ class _OtpVerifyPageState extends State<OtpVerifyPage> {
                 Text(
                   'OTP দিন',
                   style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                        fontWeight: FontWeight.bold,
-                      ),
+                    fontWeight: FontWeight.bold,
+                  ),
                   textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: 8),
@@ -583,6 +478,12 @@ class _OtpVerifyPageState extends State<OtpVerifyPage> {
                   textAlign: TextAlign.center,
                   style: TextStyle(color: Colors.grey.shade600),
                 ),
+                // const SizedBox(height: 8),
+                // Text(
+                //   'RefNo: ${widget.referenceNo}',
+                //   textAlign: TextAlign.center,
+                //   style: TextStyle(color: Colors.grey.shade500, fontSize: 12),
+                // ),
                 const SizedBox(height: 32),
                 // Countdown timer display
                 Container(
@@ -642,27 +543,27 @@ class _OtpVerifyPageState extends State<OtpVerifyPage> {
                 _isLoading
                     ? const Center(child: CircularProgressIndicator())
                     : _remainingSeconds > 0
-                        ? FilledButton(
-                            onPressed: _verifyOtp,
-                            style: FilledButton.styleFrom(
-                              padding: const EdgeInsets.symmetric(vertical: 16),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                            ),
-                            child: const Text('যাচাই করুন'),
-                          )
-                        : FilledButton.tonalIcon(
-                            onPressed: null,
-                            icon: const Icon(Icons.schedule_rounded),
-                            label: const Text('সময় শেষ হয়েছে'),
-                            style: FilledButton.styleFrom(
-                              padding: const EdgeInsets.symmetric(vertical: 16),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                            ),
+                    ? FilledButton(
+                        onPressed: _verifyOtp,
+                        style: FilledButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
                           ),
+                        ),
+                        child: const Text('যাচাই করুন'),
+                      )
+                    : FilledButton.tonalIcon(
+                        onPressed: null,
+                        icon: const Icon(Icons.schedule_rounded),
+                        label: const Text('সময় শেষ হয়েছে'),
+                        style: FilledButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                      ),
                 const SizedBox(height: 16),
                 TextButton(
                   onPressed: _isLoading ? null : () => Navigator.pop(context),
@@ -676,3 +577,4 @@ class _OtpVerifyPageState extends State<OtpVerifyPage> {
     );
   }
 }
+

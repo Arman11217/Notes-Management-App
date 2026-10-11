@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/bdapps_api_service.dart';
@@ -14,6 +16,12 @@ class AuthProvider extends ChangeNotifier {
   String? _phoneNumber;
   String? _errorMessage;
 
+  /// Backing future that completes when loadSavedSession finishes.
+  /// Replaces the placeholder set in the field initializer so callers
+  /// can `await auth.sessionReady` on app start.
+  final Completer<void> _sessionCompleter = Completer<void>();
+  Future<void> get sessionReady => _sessionCompleter.future;
+
   // ============== GETTERS ==============
   bool get isLoading => _isLoading;
   bool get isLoggedIn => _isLoggedIn;
@@ -28,18 +36,32 @@ class AuthProvider extends ChangeNotifier {
 
   /// App khulle age thaka login state load kore.
   Future<void> loadSavedSession() async {
+    if (_sessionCompleter.isCompleted) return; // idempotent guard
     try {
       final prefs = await SharedPreferences.getInstance();
-      final savedPhone = prefs.getString('logged_in_phone');
+      // Read both key families so we tolerate whichever was saved by
+      // older app versions (some screens wrote 'userPhone', this provider
+      // reads 'logged_in_phone'). Newer writes always use both keys.
+      final savedPhone = prefs.getString('logged_in_phone') ??
+          prefs.getString('userPhone');
       final savedSubscribed = prefs.getBool('is_subscribed') ?? false;
-      if (savedPhone != null && savedPhone.isNotEmpty) {
+      final savedIsLoggedIn = prefs.getBool('isLoggedIn') ?? true;
+      if (savedPhone != null && savedPhone.isNotEmpty && savedIsLoggedIn) {
         _phoneNumber = savedPhone;
         _isLoggedIn = true;
         _isSubscribed = savedSubscribed;
         notifyListeners();
+      } else {
+        _isLoggedIn = false;
+        _phoneNumber = null;
+        notifyListeners();
       }
     } catch (e) {
       // Silent fail - session save korte parle valo
+    } finally {
+      if (!_sessionCompleter.isCompleted) {
+        _sessionCompleter.complete();
+      }
     }
   }
 
@@ -53,6 +75,10 @@ class AuthProvider extends ChangeNotifier {
   Future<void> _saveSession(String phone) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('logged_in_phone', phone);
+    // Mirror under the legacy key used by older screens so we read the
+    // most recently saved value regardless of who wrote it.
+    await prefs.setString('userPhone', phone);
+    await prefs.setBool('isLoggedIn', true);
   }
 
   /// Subscription status locally save kori.
@@ -66,6 +92,30 @@ class AuthProvider extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('logged_in_phone');
     await prefs.remove('is_subscribed');
+    await prefs.remove('isLoggedIn');
+    await prefs.remove('userPhone');
+  }
+
+  /// Mark the user as logged in (after OTP succeeds) and persist.
+  /// Optionally refresh the subscription status from the server so the
+  /// rest of the app sees an up-to-date value without a full rebuild.
+  Future<void> markLoggedIn(
+    String phone, {
+    bool refreshSubscription = true,
+  }) async {
+    _phoneNumber = phone;
+    _isLoggedIn = true;
+    await _saveSession(phone);
+    if (refreshSubscription) {
+      try {
+        final hasSub = await _apiService.checkSubscription(phone);
+        _isSubscribed = hasSub;
+        await _saveSubscription(hasSub);
+      } catch (_) {
+        // Ignore — fall back to whatever value was previously stored.
+      }
+    }
+    notifyListeners();
   }
 
   /// STEP 1: Check if phone number is already subscribed.
